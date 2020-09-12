@@ -60,26 +60,31 @@ mix_query = f"""
 SELECT * FROM
     (SELECT claim_hash, claim_id, claim_name,
                release_time, effective_amount FROM claim
-               WHERE claim_type = 1 AND channel_hash IN
+               WHERE channel_hash IN
                     ({','.join('?' for _ in channels)})
                ORDER BY release_time DESC LIMIT 20)
 UNION
 SELECT * FROM
     (SELECT claim_hash, claim_id, claim_name,
                release_time, effective_amount FROM claim
-               WHERE claim_type = 1 AND channel_hash IN
+               WHERE channel_hash IN
                     ({','.join('?' for _ in channels)})
                ORDER BY effective_amount DESC LIMIT 5)
 UNION
 SELECT * FROM
     (SELECT claim_hash, claim_id, claim_name,
                release_time, effective_amount FROM claim
-               WHERE claim_type = 1 AND channel_hash IN
+               WHERE channel_hash IN
                     ({','.join('?' for _ in channels)})
-               ORDER BY trending_group, trending_mixed DESC LIMIT 5)
+               ORDER BY trending_group DESC, trending_mixed DESC LIMIT 5)
 ORDER BY release_time DESC;
 """
 
-result = pd.DataFrame(db.execute(mix_query, channels + channels + channels))
+start = time.time()
+result = db.execute(mix_query, channels + channels + channels).fetchall()
+end = time.time()
+result = pd.DataFrame(result)
 
 print(result)
+print(f"The query took {end-start} seconds.")
+
