@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import apsw
+from collections import OrderedDict
 from flask import Flask
 import json
 import requests
@@ -20,50 +21,81 @@ def hello_world():
 @app.route("/recent_channels")
 def recent_channels():
     now = int(time.time())
-    channels = db.execute("SELECT claim_hash FROM claim\
-                           WHERE claim_type = 2 AND creation_timestamp >= ?;",
-                           (now - 86400*7, )).fetchall()
-    channels = [c[0] for c in channels]
 
-    # Filter down to those whove published five streams
-    channels2 = []
-    for channel in channels:
-        count = db.execute("SELECT COUNT(claim_hash) FROM claim\
-                            WHERE channel_hash = ? AND claim_type = 1;",
-                           (channel, )).fetchone()[0]
-        if count >= 5:
-            channels2.append(channel)
+    channels = OrderedDict()
+    for row in db.execute("SELECT claim_id, claim_name,\
+                           (? - creation_timestamp)/86400.0 age_days\
+                           FROM claim\
+                           WHERE claim_type = 2 AND age_days <= 60.0;",
+                           (now, )):
+        claim_id, claim_name, age_days = row
+        channels[claim_id] = dict(claim_name=claim_name, age_days=age_days)
+
+    claim_hashes = [bytes.fromhex(key)[::-1] for key in channels]
+
+    # Filter down to those who have published two streams per week
+    channels2 = OrderedDict()
+    for row in db.execute(f"SELECT channels.claim_id, COUNT(*) num FROM claim streams\
+                                     INNER JOIN claim channels ON\
+                                     channels.claim_hash = streams.channel_hash\
+                            WHERE channels.claim_hash IN\
+                            ({','.join('?' for _ in claim_hashes)})\
+                            AND streams.claim_type = 1\
+                            GROUP BY channels.claim_hash\
+                            HAVING num >= 2;",
+                            claim_hashes):
+        claim_id, publications = row
+        if row[1] >= (2/7)*channels[claim_id]["age_days"]:
+            channels2[claim_id] = channels[claim_id]
+            channels2[claim_id]["publications"] = publications
+    channels = channels2
 
     # Now count the followers
-    claim_ids = [channel[::-1].hex() for channel in channels2]
-    claim_ids = ",".join(claim_ids)
+    claim_ids = ",".join(list(channels.keys()))
     response = requests.post("https://api.lbry.com/subscription/sub_count",
                          data={"auth_token": "D18DoyrNVG6eAT1TTtzVbPqkiZoRAyPu",
                                "claim_id": claim_ids})
-
     if response.status_code != 200:
         return json.dumps(dict(error="Something went wrong."))
 
-
     followers = response.json()["data"]
 
-    # Filter again
-    followers3 = dict()
-    for i in range(len(followers)):
-        if followers[i] >= 20:
-            followers3[channels2[i]] = followers[i]
-    chs = list(followers3.keys())
+    # Filter again - one follower per day
+    channels2 = OrderedDict()
+    i = 0
+    for key in channels:
+        if followers[i] >= 1.0*channels[key]["age_days"] and followers[i] >= 10:
+            channels2[key] = channels[key]
+            channels2[key]["followers"] = followers[i]
+        i += 1
+    channels = channels2
 
-    html = "<html><head><title>Hi</title></head><body>\n"
-    for row in db.execute(f"SELECT claim_name, claim_id, creation_timestamp, claim_hash FROM claim\
-                        WHERE claim_hash\
-                            IN ({','.join('?' for _ in chs)})\
-                        ORDER BY creation_timestamp DESC;",
-                        chs):
-        url = "https://odysee.com/" + row[0] + ":" + row[1]
-        age = (now - row[2])/86400.0
-        html += f"<a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">Channel\
-                  {row[0]} with {followers3[row[3]]} followers, created {age} days ago.</a><br>\n"
+    # Convert to list
+    channels2 = []
+    for key in channels:
+        chan = channels[key]
+        channels2.append({"url": "https://odysee.com/" + chan["claim_name"]
+                            + ":" + key,
+                          "claim_name": chan["claim_name"],
+                          "age_days": chan["age_days"],
+                          "followers": chan["followers"]})
+    channels = channels2
+    channels = sorted(channels, key = lambda chan: chan["age_days"])
+
+    html = """
+            <html><head><title>Hi</title></head><body>
+                <h1>Channels created in the last 60 days</h1>\n
+                Fulfilling these criteria:
+                <ul>
+                    <li>At least two publications per week</li>
+                    <li>At least one follower per day</li>
+                    <li>At least two publications and ten followers overall</li>
+                </ul>\n"""
+    for channel in channels:
+        print(channel)
+        html += f"<a href=\"{channel['url']}\" target=\"_blank\" rel=\"noopener noreferrer\">Channel\
+                  {channel['claim_name']} with {channel['followers']} followers,\
+                  created {channel['age_days']:.3f} days ago.</a><br>\n"
 
     return html + "</body></html>"
 
