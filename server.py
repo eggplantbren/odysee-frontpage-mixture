@@ -10,6 +10,7 @@ app = Flask(__name__)
 
 conn = apsw.Connection("/home/brewer/lbry-sdk-0.80.0/lbryum_data/claims.db",
                        flags=apsw.SQLITE_OPEN_READONLY)
+conn.setbusytimeout(60000)
 db = conn.cursor()
 
 @app.route("/")
@@ -21,7 +22,7 @@ def recent_channels():
     now = int(time.time())
     channels = db.execute("SELECT claim_hash FROM claim\
                            WHERE claim_type = 2 AND creation_timestamp >= ?;",
-                           (now - 86400*3, )).fetchall()
+                           (now - 86400*7, )).fetchall()
     channels = [c[0] for c in channels]
 
     # Filter down to those whove published five streams
@@ -47,21 +48,24 @@ def recent_channels():
     followers = response.json()["data"]
 
     # Filter again
-    channels3 = []
+    followers3 = dict()
     for i in range(len(followers)):
         if followers[i] >= 20:
-            channels3.append(channels2[i])
+            followers3[channels2[i]] = followers[i]
+    chs = list(followers3.keys())
 
-    result = []
-    stuff = db.execute(f"SELECT claim_name, claim_id FROM claim\
+    html = "<html><head><title>Hi</title></head><body>\n"
+    for row in db.execute(f"SELECT claim_name, claim_id, creation_timestamp, claim_hash FROM claim\
                         WHERE claim_hash\
-                            IN ({','.join('?' for _ in channels3)})",
-                        channels3).fetchall()
-    for row in stuff:
-        result.append(dict(url="https://odysee.com/" + row[0] + ":"\
-                            + row[1]))
+                            IN ({','.join('?' for _ in chs)})\
+                        ORDER BY creation_timestamp DESC;",
+                        chs):
+        url = "https://odysee.com/" + row[0] + ":" + row[1]
+        age = (now - row[2])/86400.0
+        html += f"<a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">Channel\
+                  {row[0]} with {followers3[row[3]]} followers, created {age} days ago.</a><br>\n"
 
-    return tuple(result)
+    return html + "</body></html>"
 
 
 @app.route("/frontpage/<claim_ids>/<page_size>")
