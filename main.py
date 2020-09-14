@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import time
 
-conn = apsw.Connection("/home/brewer/lbry-sdk-0.80.0/lbryum_data/claims.db",
+conn = apsw.Connection("/home/brewer/lbry-sdk-0.81.0/lbryum_data/claims.db",
                        flags=apsw.SQLITE_OPEN_READONLY)
 db = conn.cursor()
 
@@ -57,31 +57,22 @@ channels = ['47c6a778ea4836b0987ccc4ce27b26d5f886ec1d',
 channels = [bytes.fromhex(channel)[::-1] for channel in channels]
 
 mix_query = f"""
-SELECT * FROM
-    (SELECT claim_hash, claim_id, claim_name,
-               release_time, effective_amount FROM claim
-               WHERE channel_hash IN
-                    ({','.join('?' for _ in channels)})
-               ORDER BY release_time DESC LIMIT 20)
-UNION
-SELECT * FROM
-    (SELECT claim_hash, claim_id, claim_name,
-               release_time, effective_amount FROM claim
-               WHERE channel_hash IN
-                    ({','.join('?' for _ in channels)})
-               ORDER BY effective_amount DESC LIMIT 5)
-UNION
-SELECT * FROM
-    (SELECT claim_hash, claim_id, claim_name,
-               release_time, effective_amount FROM claim
-               WHERE channel_hash IN
-                    ({','.join('?' for _ in channels)})
-               ORDER BY trending_group DESC, trending_mixed DESC LIMIT 5)
-ORDER BY release_time DESC;
+    SELECT * FROM
+        (SELECT claim_id, release_time FROM claim
+                   WHERE channel_hash IN
+                        ({','.join('?' for _ in channels)})
+                   ORDER BY release_time DESC LIMIT 20)
+    UNION
+    SELECT * FROM
+        (SELECT claim_id, release_time FROM claim
+                   WHERE channel_hash IN
+                        ({','.join('?' for _ in channels)})
+                   ORDER BY trending_group, trending_mixed DESC LIMIT 20)
+    ORDER BY release_time DESC LIMIT 20;
 """
 
 start = time.time()
-result = db.execute(mix_query, channels + channels + channels).fetchall()
+result = db.execute(mix_query, channels+channels).fetchall()
 end = time.time()
 result = pd.DataFrame(result)
 
